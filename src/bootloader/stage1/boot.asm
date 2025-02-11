@@ -1,9 +1,16 @@
 org 0x7C00
 bits 16
 
+%define BYTES_PER_SECTOR    512
+%define FAT_COUNT           2
+%define SECTORS_PER_FAT     9
+%define RESERVED_SECTORS    1
+%define ROOT_DIR_LBA        RESERVED_SECTORS + FAT_COUNT * SECTORS_PER_FAT  ; 1 + 2 * 9 = 19
+%define DIR_ENTRIES_COUNT   0E0h                                            ; 224
+%define ROOT_DIR_SECTORS    (DIR_ENTRIES_COUNT * 32) / BYTES_PER_SECTOR     ; (224 * 32) / 512 = 14
+%define FIRST_CLUSTER       ROOT_DIR_LBA + ROOT_DIR_SECTORS - 2             ; 19 + 14 - 2 = 31 (2 reserved)
 
-%define ENDL 0x0D, 0x0A
-
+%define ENDL                0x0D, 0x0A
 
 ;
 ; FAT12 header
@@ -12,14 +19,14 @@ jmp short start
 nop
 
 bdb_oem:                    db 'MSWIN4.1'           ; 8 bytes
-bdb_bytes_per_sector:       dw 512
+bdb_bytes_per_sector:       dw BYTES_PER_SECTOR
 bdb_sectors_per_cluster:    db 1
-bdb_reserved_sectors:       dw 1
-bdb_fat_count:              db 2
-bdb_dir_entries_count:      dw 0E0h
+bdb_reserved_sectors:       dw RESERVED_SECTORS
+bdb_fat_count:              db FAT_COUNT
+bdb_dir_entries_count:      dw DIR_ENTRIES_COUNT
 bdb_total_sectors:          dw 2880                 ; 2880 * 512 = 1.44MB
 bdb_media_descriptor_type:  db 0F0h                 ; F0 = 3.5" floppy disk
-bdb_sectors_per_fat:        dw 9                    ; 9 sectors/fat
+bdb_sectors_per_fat:        dw SECTORS_PER_FAT
 bdb_sectors_per_track:      dw 18
 bdb_heads:                  dw 2
 bdb_hidden_sectors:         dd 0
@@ -33,19 +40,15 @@ ebr_volume_id:              db 12h, 34h, 56h, 78h   ; serial number, value doesn
 ebr_volume_label:           db 'NANOBYTE OS'        ; 11 bytes, padded with spaces
 ebr_system_id:              db 'FAT12   '           ; 8 bytes
 
-;
-; Code goes here
-;
-
 start:
     ; setup data segments
     mov ax, 0           ; can't set ds/es directly
-    mov ds, ax
-    mov es, ax
+    mov ds, ax          ; data segment
+    mov es, ax          ; extra segment
     
     ; setup stack
-    mov ss, ax
-    mov sp, 0x7C00              ; stack grows downwards from where we are loaded in memory
+    mov ss, ax          ; reset stack
+    mov sp, 0x7C00      ; stack grows downwards from where we are loaded in memory
 
     ; some BIOSes might start us at 07C0:0000 instead of 0000:7C00, make sure we are in the
     ; expected location
@@ -56,69 +59,34 @@ start:
 .after:
 
     ; read something from floppy disk
-    ; BIOS should set DL to drive number
+    ; BIOS has set the active drive in DL. Store it in ebr_drive_number
+    ; in the copy of the boot sector
     mov [ebr_drive_number], dl
 
-    ; show loading message
-    mov si, msg_loading
-    call puts
-
-    ; read drive parameters (sectors per track and head count),
-    ; instead of relying on data on formatted disk
-    push es
-    mov ah, 08h
-    int 13h
-    jc floppy_error
-    pop es
-
-    and cl, 0x3F                        ; remove top 2 bits
-    xor ch, ch
-    mov [bdb_sectors_per_track], cx     ; sector count
-
-    inc dh
-    mov [bdb_heads], dh                 ; head count
-
-    ; compute LBA of root directory = reserved + fats * sectors_per_fat
-    ; note: this section can be hardcoded
-    mov ax, [bdb_sectors_per_fat]
-    mov bl, [bdb_fat_count]
-    xor bh, bh
-    mul bx                              ; ax = (fats * sectors_per_fat)
-    add ax, [bdb_reserved_sectors]      ; ax = LBA of root directory
-    push ax
-
-    ; compute size of root directory = (32 * number_of_entries) / bytes_per_sector
-    mov ax, [bdb_dir_entries_count]
-    shl ax, 5                           ; ax *= 32
-    xor dx, dx                          ; dx = 0
-    div word [bdb_bytes_per_sector]     ; number of sectors we need to read
-
-    test dx, dx                         ; if dx != 0, add 1
-    jz .root_dir_after
-    inc ax                              ; division remainder != 0, add 1
-                                        ; this means we have a sector only partially filled with entries
-.root_dir_after:
-
-    ; read root directory
-    mov cl, al                          ; cl = number of sectors to read = size of root directory
-    pop ax                              ; ax = LBA of root directory
+;================================================================================
+; read root directory
+;================================================================================
+    mov cl, ROOT_DIR_SECTORS
+    mov ax, ROOT_DIR_LBA
     mov dl, [ebr_drive_number]          ; dl = drive number (we saved it previously)
     mov bx, buffer                      ; es:bx = buffer
     call disk_read
 
-    ; search for kernel.bin
-    xor bx, bx
+;================================================================================
+; Search stage 2 file entry in the root directory
+;================================================================================
+    xor bx, bx                          ; use as entry counter in the loop
     mov di, buffer
 
 .search_kernel:
-    mov si, file_stage2_bin
-    mov cx, 11                          ; compare up to 11 characters
-    push di
-    repe cmpsb
+    mov si, file_stage2_bin             ; point to the file name of the stage 2 binary
+    mov cx, 11                          ; used by repe as a counter
+    push di                             ; keep di to save start position of entry
+    repe cmpsb                          ; compare strings in ES:DI and DS:SI. repe = repeat while equal
     pop di
-    je .found_kernel
+    je .found_kernel                    ; if strings are equal, DI contains start of entry
 
-    add di, 32
+    add di, 32                          ; if not, skip to next entry, which is 32 bytes further
     inc bx
     cmp bx, [bdb_dir_entries_count]
     jl .search_kernel
@@ -128,18 +96,25 @@ start:
 
 .found_kernel:
 
+;================================================================================
+; Load stage 2 into memory, starting at the first cluster, which the
+; direcory entry found above points to.
+;================================================================================
+
     ; di should have the address to the entry
-    mov ax, [di + 26]                   ; first logical cluster field (offset 26)
+    mov ax, [di + 26]                   ; first logical cluster field (offset 26 within the dir entry)
     mov [stage2_cluster], ax
 
     ; load FAT from disk into memory
-    mov ax, [bdb_reserved_sectors]
-    mov bx, buffer
-    mov cl, [bdb_sectors_per_fat]
-    mov dl, [ebr_drive_number]
+    mov ax, [bdb_reserved_sectors]      ; LBA of the FAT starts rights after the reserved sectors
+    mov bx, buffer                      ; the buffer to load the FAT into
+    mov cl, [bdb_sectors_per_fat]       ; the number of sectors to read (the size of the FAT in sectors)
+    mov dl, [ebr_drive_number]          ; the drive to read from
     call disk_read
 
     ; read kernel and process FAT chain
+    ; ES: segment
+    ; BX: OFFSET (used by disk_read)
     mov bx, KERNEL_LOAD_SEGMENT
     mov es, bx
     mov bx, KERNEL_LOAD_OFFSET
@@ -149,16 +124,17 @@ start:
     ; Read next cluster
     mov ax, [stage2_cluster]
     
-    ; not nice :( hardcoded value
-    add ax, 31                          ; first cluster = (stage2_cluster - 2) * sectors_per_cluster + start_sector
-                                        ; start sector = reserved + fats + root directory size = 1 + 18 + 134 = 33
-    mov cl, 1
-    mov dl, [ebr_drive_number]
+    add ax, FIRST_CLUSTER
+
+    mov cl, 1                           ; number of sectors to read
+    mov dl, [ebr_drive_number]          ; from which drive to read
     call disk_read
 
-    add bx, [bdb_bytes_per_sector]
+    add bx, [bdb_bytes_per_sector]      ; advance the pointer to the disk_read buffer
 
     ; compute location of next cluster
+    ; multiply the index of the next cluster by 3, then devide by 2, because each FAT entry is 12 bits
+    ; (1.5 bytes) wide.
     mov ax, [stage2_cluster]
     mov cx, 3
     mul cx
@@ -169,14 +145,18 @@ start:
     add si, ax
     mov ax, [ds:si]                     ; read entry from FAT table at index ax
 
+    ; dx contains the remainder of the division by 2 above. If it's 0, the next cluster is even
+    ; otherwise it's odd.
     or dx, dx
     jz .even
 
 .odd:
+    ; for odd clusters, the value is in the top 12 bits
     shr ax, 4
     jmp .next_cluster_after
 
 .even:
+    ; for even clusters, the value is in the bottom 12 bits
     and ax, 0x0FFF
 
 .next_cluster_after:
@@ -362,7 +342,6 @@ disk_reset:
     ret
 
 
-msg_loading:            db 'Loading...', ENDL, 0
 msg_read_failed:        db 'Read from disk failed!', ENDL, 0
 msg_stage2_not_found:   db 'STAGE2.BIN file not found!', ENDL, 0
 file_stage2_bin:        db 'STAGE2  BIN'
@@ -372,7 +351,7 @@ KERNEL_LOAD_SEGMENT     equ 0x2000
 KERNEL_LOAD_OFFSET      equ 0
 
 
-times 510-($-$$) db 0
+;times 510-($-$$) db 0
 dw 0AA55h
 
 buffer:
