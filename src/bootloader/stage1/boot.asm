@@ -98,14 +98,14 @@ start:
 
 ;================================================================================
 ; Load stage 2 into memory, starting at the first cluster, which the
-; direcory entry found above points to.
+; direcory entry found (in DI) above points to.
 ;================================================================================
 
     ; di should have the address to the entry
     mov ax, [di + 26]                   ; first logical cluster field (offset 26 within the dir entry)
     mov [stage2_cluster], ax
 
-    ; load FAT from disk into memory
+    ; load FAT from disk into buffer
     mov ax, [bdb_reserved_sectors]      ; LBA of the FAT starts rights after the reserved sectors
     mov bx, buffer                      ; the buffer to load the FAT into
     mov cl, [bdb_sectors_per_fat]       ; the number of sectors to read (the size of the FAT in sectors)
@@ -115,17 +115,13 @@ start:
     ; read kernel and process FAT chain
     ; ES: segment
     ; BX: OFFSET (used by disk_read)
-    mov bx, KERNEL_LOAD_SEGMENT
+    mov bx, STAGE2_LOAD_SEGMENT
     mov es, bx
-    mov bx, KERNEL_LOAD_OFFSET
+    mov bx, STAGE2_LOAD_OFFSET
 
 .load_kernel_loop:
-    
-    ; Read next cluster
     mov ax, [stage2_cluster]
-    
     add ax, FIRST_CLUSTER
-
     mov cl, 1                           ; number of sectors to read
     mov dl, [ebr_drive_number]          ; from which drive to read
     call disk_read
@@ -141,41 +137,39 @@ start:
     mov cx, 2
     div cx                              ; ax = index of entry in FAT, dx = cluster mod 2
 
-    mov si, buffer
-    add si, ax
-    mov ax, [ds:si]                     ; read entry from FAT table at index ax
+    mov si, buffer                      ; the buffer pointer points to the start of the FAT
+    add si, ax                          ; add the result of the multiplication above
+    mov ax, [si]                        ; read entry from FAT table at index ax
 
-    ; dx contains the remainder of the division by 2 above. If it's 0, the next cluster is even
-    ; otherwise it's odd.
-    or dx, dx
-    jz .even
+    or dx, dx                           ; look at the remainder of the division
+    jz .even                            ; if it's zero, the result is even
 
 .odd:
-    ; for odd clusters, the value is in the top 12 bits
-    shr ax, 4
+    shr ax, 4                           ; for odd clusters, the value is in the top 12 bits
     jmp .next_cluster_after
 
 .even:
-    ; for even clusters, the value is in the bottom 12 bits
-    and ax, 0x0FFF
+    and ax, 0x0FFF                      ; for even clusters, the value is in the bottom 12 bits
 
 .next_cluster_after:
     cmp ax, 0x0FF8                      ; end of chain
-    jae .read_finish
+    jae .jump_to_next_stage
 
-    mov [stage2_cluster], ax
+    mov [stage2_cluster], ax            ; ax contains the next cluster index
     jmp .load_kernel_loop
 
-.read_finish:
-    
-    ; jump to our kernel
-    mov dl, [ebr_drive_number]          ; boot device in dl
 
-    mov ax, KERNEL_LOAD_SEGMENT         ; set segment registers
+;================================================================================
+; The next stage is loaded into memory. 
+;================================================================================
+
+.jump_to_next_stage:
+    mov dl, [ebr_drive_number]          ; boot device in dl
+    mov ax, STAGE2_LOAD_SEGMENT         ; set segment registers
     mov ds, ax
     mov es, ax
 
-    jmp KERNEL_LOAD_SEGMENT:KERNEL_LOAD_OFFSET
+    jmp STAGE2_LOAD_SEGMENT:STAGE2_LOAD_OFFSET
 
     jmp wait_key_and_reboot             ; should never happen
 
@@ -183,10 +177,9 @@ start:
     hlt
 
 
-;
+;================================================================================
 ; Error handlers
-;
-
+;================================================================================
 floppy_error:
     mov si, msg_read_failed
     call puts
@@ -195,7 +188,6 @@ floppy_error:
 kernel_not_found_error:
     mov si, msg_stage2_not_found
     call puts
-    jmp wait_key_and_reboot
 
 wait_key_and_reboot:
     mov ah, 0
@@ -347,11 +339,11 @@ msg_stage2_not_found:   db 'STAGE2.BIN file not found!', ENDL, 0
 file_stage2_bin:        db 'STAGE2  BIN'
 stage2_cluster:         dw 0
 
-KERNEL_LOAD_SEGMENT     equ 0x2000
-KERNEL_LOAD_OFFSET      equ 0
+STAGE2_LOAD_SEGMENT     equ 0x2000
+STAGE2_LOAD_OFFSET      equ 0
 
 
-;times 510-($-$$) db 0
+times 510-($-$$) db 0
 dw 0AA55h
 
 buffer:

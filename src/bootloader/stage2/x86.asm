@@ -8,13 +8,36 @@ section _TEXT class=CODE
 ;
 global _x86_Video_WriteCharTeletype
 _x86_Video_WriteCharTeletype:
-    
+
     ; make new call frame
+
+
+    ; |     |     |     |     | ret |     | arg1 |     | arg2 |     | ... |     |
+    ; |     |     |     |     |     |     |      |     |      |     |     |     |
+    ;                            ^                                           ^
+    ;                           sp                                          bp
+    
     push bp             ; save old call frame
+    ; |     |     | old |     | ret |     | arg1 |     | arg2 |     | ... |     |
+    ; |     |     | bp  |     |     |     |      |     |      |     |     |     |
+    ;                ^                                                       ^
+    ;               sp                                                      bp
+
     mov bp, sp          ; initialize new call frame
+    ; |     |     | old |     | ret |     | arg1 |     | arg2 |     | ... |     |
+    ; |     |     | bp  |     |     |     |      |     |      |     |     |     |
+    ;               ^                        ^            ^
+    ;              sp                       bp+4         bp+6
+    ;              bp
+
 
     ; save bx
     push bx
+    ; |  bx |     | old |     | ret |     | arg1 |     | arg2 |     | ... |     |
+    ; |     |     | bp  |     |     |     |      |     |      |     |     |     |
+    ;    ^          ^                        ^            ^
+    ;   sp         bp                       bp+4         bp+6
+
 
     ; [bp + 0] - old call frame
     ; [bp + 2] - return address (small memory model => 2 bytes)
@@ -29,8 +52,17 @@ _x86_Video_WriteCharTeletype:
 
     ; restore bx
     pop bx
+    ; |  bx |     | old |     | ret |     | arg1 |     | arg2 |     | ... |     |
+    ; |     |     | bp  |     |     |     |      |     |      |     |     |     |
+    ;               ^                        ^            ^
+    ;              sp                       bp+4         bp+6
+    ;              bp
 
     ; restore old call frame
-    mov sp, bp
+    mov sp, bp  ; not really necessary here
     pop bp
+    ; |  bx |     | old |     | ret |     | arg1 |     | arg2 |     | ... |     |
+    ; |     |     | bp  |     |     |     |      |     |      |     |     |     |
+    ;                            ^                                           ^
+    ;                           sp                                          bp
     ret
