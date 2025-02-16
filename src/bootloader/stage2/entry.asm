@@ -131,35 +131,103 @@ ScreenBuffer                        equ 0xB8000
 g_GDT:      ; NULL descriptor
             dq 0
 
-            ; 32-bit code segment
+;===========================================================================
+; 32-bit code segment
+;===========================================================================
             dw 0FFFFh                   ; limit (bits 0-15) = 0xFFFFF for full 32-bit range
             dw 0                        ; base (bits 0-15) = 0x0
             db 0                        ; base (bits 16-23)
+            ;  1 00  1 1 0  1  0
+            ;  P DPL S E DC RW A
+            ; P=1:    Present
+            ; DPL=00: Descriptor privilege level field (0=highest)
+            ; S=1:    Descriptor type bit (0=system, 1=code/data)
+            ; E=1:    Executable bit (0=data, 1=code)
+            ; DC=0:   Conforming bit (0=only executable by set DPL,
+            ;                         1=executable by equal or lower DPL)
+            ; RW=1:   Readable (1=read access allowed)
+            ; A=0:    Accessed
             db 10011010b                ; access (present, ring 0, code segment, executable, direction 0, readable)
+            ;  1 1  0 0   1111
+            ;  G DB L Res Lim(16-19)
+            ; G=1:  Granularity (0=1 byte, 1=4k)
+            ; DB=1: Size (0=16 bits, 1=32 bits)
+            ; L=0: Long-mode code (1=64 bits)
             db 11001111b                ; granularity (4k pages, 32-bit pmode) + limit (bits 16-19)
             db 0                        ; base high
 
-            ; 32-bit data segment
+;===========================================================================
+; 32-bit data segment
+;===========================================================================
             dw 0FFFFh                   ; limit (bits 0-15) = 0xFFFFF for full 32-bit range
             dw 0                        ; base (bits 0-15) = 0x0
             db 0                        ; base (bits 16-23)
+            ;  1 00  1 0 0  1  0
+            ;  P DPL S E DC RW A
+            ; P=1:    Present
+            ; DPL=00: Descriptor privilege level field (0=highest)
+            ; S=1:    Descriptor type bit (0=system, 1=code/data)
+            ; E=0:    Executable bit (0=data, 1=code)
+            ; DC=0:   Direction bit (0=segment grows up,
+            ;                        1=segment grows down)
+            ; RW=1:   Writeable (1=write access allowed)
+            ; A=0:    Accessed
             db 10010010b                ; access (present, ring 0, data segment, executable, direction 0, writable)
+            ;  1 1  0 0   1111
+            ;  G DB L Res Lim(16-19)
+            ; G=1:  Granularity (0=1 byte, 1=4k)
+            ; DB=1: Size (0=16 bits, 1=32 bits)
+            ; L=0: Long-mode code (1=64 bits)
             db 11001111b                ; granularity (4k pages, 32-bit pmode) + limit (bits 16-19)
             db 0                        ; base high
 
-            ; 16-bit code segment
+;===========================================================================
+; 16-bit code segment
+;===========================================================================
             dw 0FFFFh                   ; limit (bits 0-15) = 0xFFFFF
             dw 0                        ; base (bits 0-15) = 0x0
             db 0                        ; base (bits 16-23)
+            ;  1 00  1 1 0  1  0
+            ;  P DPL S E DC RW A
+            ; P=1:    Present
+            ; DPL=00: Descriptor privilege level field (0=highest)
+            ; S=1:    Descriptor type bit (0=system, 1=code/data)
+            ; E=1:    Executable bit (0=data, 1=code)
+            ; DC=0:   Conforming bit (0=only executable by set DPL,
+            ;                         1=executable by equal or lower DPL)
+            ; RW=1:   Readable (1=read access allowed)
+            ; A=0:    Accessed
             db 10011010b                ; access (present, ring 0, code segment, executable, direction 0, readable)
+            ;  0 0  0 0   1111
+            ;  G DB L Res Lim(16-19)
+            ; G=1:  Granularity (0=1 byte, 1=4k)
+            ; DB=1: Size (0=16 bits, 1=32 bits)
+            ; L=0: Long-mode code (1=64 bits)
             db 00001111b                ; granularity (1b pages, 16-bit pmode) + limit (bits 16-19)
             db 0                        ; base high
 
-            ; 16-bit data segment
+;===========================================================================
+; 16-bit data segment
+;===========================================================================
             dw 0FFFFh                   ; limit (bits 0-15) = 0xFFFFF
             dw 0                        ; base (bits 0-15) = 0x0
             db 0                        ; base (bits 16-23)
+            ;  1 00  1 0 0  1  0
+            ;  P DPL S E DC RW A
+            ; P=1:    Present
+            ; DPL=00: Descriptor privilege level field (0=highest)
+            ; S=1:    Descriptor type bit (0=system, 1=code/data)
+            ; E=0:    Executable bit (0=data, 1=code)
+            ; DC=0:   Direction bit (0=segment grows up,
+            ;                        1=segment grows down)
+            ; RW=1:   Writeable (1=write access allowed)
+            ; A=0:    Accessed
             db 10010010b                ; access (present, ring 0, data segment, executable, direction 0, writable)
+            ;  0 0  0 0   1111
+            ;  G DB L Res Lim(16-19)
+            ; G=1:  Granularity (0=1 byte, 1=4k)
+            ; DB=1: Size (0=16 bits, 1=32 bits)
+            ; L=0: Long-mode code (1=64 bits)
             db 00001111b                ; granularity (1b pages, 16-bit pmode) + limit (bits 16-19)
             db 0                        ; base high
 
